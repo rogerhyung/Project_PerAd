@@ -1,0 +1,84 @@
+##########################
+## Low-Level feature extraction by window-slding
+## @author: Jungjyun Hyung
+## @since: 2025-05-22
+############################
+
+import librosa
+import numpy as np
+import scipy.signal
+import pandas as pd
+import os
+
+current_directory = os.getcwd()
+print(f"Current working directory: {current_directory}")
+
+
+# Change the current working directory
+new_directory = "C:\\Users\\KU01\\Desktop\\Project\\Music"  # Replace with the desired path
+os.chdir(new_directory)
+
+# Verify the change
+current_directory = os.getcwd()
+print(f"Current working directory: {current_directory}")
+def extract_low_level_features_segment(y_segment, sr):
+    """Extract features for one audio segment"""
+    if y_segment.ndim > 1:
+        y_segment = np.mean(y_segment, axis=1)
+
+    duration_sec = len(y_segment) / sr
+    rms_energy = np.sqrt(np.mean(y_segment ** 2))
+    zcr = ((y_segment[:-1] * y_segment[1:]) < 0).sum() / len(y_segment)
+
+    fft_vals = np.abs(np.fft.rfft(y_segment))
+    freqs = np.fft.rfftfreq(len(y_segment), 1/sr)
+    fft_sum = np.sum(fft_vals) + 1e-10
+
+    spectral_centroid = np.sum(freqs * fft_vals) / fft_sum
+    spectral_bandwidth = np.sqrt(np.sum(((freqs - spectral_centroid)**2) * fft_vals) / fft_sum)
+    spectral_rolloff = freqs[np.where(np.cumsum(fft_vals) >= 0.85 * fft_sum)[0][0]]
+
+    energy_env = np.convolve(y_segment**2, np.ones(1024), 'same')
+    peaks, _ = scipy.signal.find_peaks(energy_env, distance=sr*60//200)
+    intervals = np.diff(peaks) / sr
+    tempo_bpm = 60.0 / np.mean(intervals) if len(intervals) > 0 else 0.0
+
+    return {
+        "duration_sec": duration_sec,
+        "rms_energy": rms_energy,
+        "zcr": zcr,
+        "spectral_centroid": spectral_centroid,
+        "spectral_bandwidth": spectral_bandwidth,
+        "spectral_rolloff": spectral_rolloff,
+        "tempo_bpm": tempo_bpm
+    }
+
+# Load audio
+y, sr = librosa.load("brain_implant.wav")
+
+# Beat tracking
+tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+
+# Sliding window: 5 beats wide, stride 1
+features_sequence = []
+for i in range(len(beat_times) - 5 + 1):
+    start_time = beat_times[i]
+    end_time = beat_times[i + 4]
+
+    start_sample = int(start_time * sr)
+    end_sample = int(end_time * sr)
+
+    y_segment = y[start_sample:end_sample]
+    features = extract_low_level_features_segment(y_segment, sr)
+    features['segment_index'] = i
+    features['start_time'] = start_time
+    features['end_time'] = end_time
+    features_sequence.append(features)
+
+# Convert to DataFrame
+df_sequence = pd.DataFrame(features_sequence)
+print(df_sequence.head())
+
+# Optional: Save to CSV
+# df_sequence.to_csv("brain_implant_feature_sequence.csv", index=False)
